@@ -7,11 +7,11 @@ let player = {
     dx: 0, dy: 0, jump: -12, gravity: 0.6, 
     speed: 5, grounded: true, jumpsLeft: 2, 
     isCrouching: false, isDashing: false, dashTimer: 0, canDash: true,
-    dashLag: 0, // New: End lag timer
-    hasShield: false, scoreMult: 1, multTimer: 0
+    dashLag: 0, hasShield: false, scoreMult: 1, multTimer: 0
 };
 
 let obstacles = [];
+let enemies = [];
 let particles = [];
 let trails = [];
 let powerups = []; 
@@ -20,34 +20,26 @@ let highScore = localStorage.getItem('runnerHighScore') || 0;
 let gameActive = true;
 let lastSpawnTime = 0;
 let minSpawnInterval = 1000;
-let keys = {}; // Track multiple key presses for smoother movement
+let keys = {};
 
-class Particle {
-    constructor(x, y, color) {
-        this.x = x; this.y = y;
-        this.size = Math.random() * 5 + 2;
-        this.speedX = (Math.random() - 0.5) * 8;
-        this.speedY = (Math.random() - 0.5) * 8;
-        this.color = color || `hsl(${Math.random() * 360}, 50%, 50%)`;
-        this.life = 1.0;
-    }
-    update() { this.x += this.speedX; this.y += this.speedY; this.life -= 0.03; }
-    draw() {
-        ctx.globalAlpha = this.life; ctx.fillStyle = this.color;
-        ctx.fillRect(this.x, this.y, this.size, this.size);
-        ctx.globalAlpha = 1.0;
-    }
-}
+// --- SPEED LOGIC ---
+let gameSpeed = 1.0; // Base multiplier
 
-function spawnObstacle(currentTime) {
-    if (currentTime - lastSpawnTime > minSpawnInterval) {
-        if (Math.random() < 0.05) {
-            let type = Math.random() > 0.7 ? 'high' : 'low';
-            obstacles.push({ x: canvas.width, y: type === 'high' ? 300 : 350, w: 20, h: 30, type });
+function spawnEntities(currentTime) {
+    // Adjust spawn frequency based on speed so the screen doesn't get too crowded
+    let adjustedInterval = Math.max(400, minSpawnInterval / gameSpeed);
+    
+    if (currentTime - lastSpawnTime > adjustedInterval) {
+        const rand = Math.random();
+        if (rand < 0.05) {
+            if (Math.random() > 0.3) {
+                let type = Math.random() > 0.7 ? 'high' : 'low';
+                obstacles.push({ x: canvas.width, y: type === 'high' ? 300 : 350, w: 20, h: 30, type });
+            } else {
+                enemies.push({ x: canvas.width, y: 350, w: 30, h: 30 });
+            }
             lastSpawnTime = currentTime;
-            minSpawnInterval = Math.max(500, 1000 - (score / 15));
         }
-        // Lowered spawn rate (0.3% chance per frame)
         if (Math.random() < 0.003) {
             let pType = Math.random() > 0.5 ? 'shield' : 'mult';
             powerups.push({ x: canvas.width, y: 320, w: 20, h: 20, type: pType });
@@ -61,47 +53,58 @@ function update(currentTime) {
         return;
     }
 
+    // Update Game Speed based on score (increases every 100 points)
+    gameSpeed = 1.0 + (score / 1000); 
+
     // Horizontal Movement
     if (!player.isDashing && player.dashLag <= 0) {
         if (keys['ArrowRight']) player.x += player.speed;
         if (keys['ArrowLeft']) player.x -= player.speed;
     }
 
-    // Dash Logic
     if (player.isDashing) {
         trails.push({ x: player.x, y: player.y, w: player.w, h: player.h, life: 0.5 });
         player.dashTimer--;
         player.x += 15; 
-        if (player.dashTimer <= 0) {
-            player.isDashing = false;
-            player.dashLag = 20; // 20 frames of "end lag" (recovery)
-        }
+        if (player.dashTimer <= 0) { player.isDashing = false; player.dashLag = 20; }
     } else {
         player.dy += player.gravity;
         player.y += player.dy;
         if (player.dashLag > 0) player.dashLag--;
     }
 
-    // Screen Bounds
     if (player.x < 0) player.x = 0;
     if (player.x + player.w > canvas.width) player.x = canvas.width - player.w;
 
-    // Grounding
     if (player.y + player.h > 380) {
         player.y = 380 - player.h; player.dy = 0; player.grounded = true;
         player.jumpsLeft = 2; player.canDash = true;
     }
 
-    // Update Trails & Timers
-    trails.forEach((t, i) => { t.life -= 0.05; if (t.life <= 0) trails.splice(i, 1); });
-    if (player.multTimer > 0) {
-        player.multTimer--;
-        if (player.multTimer === 0) player.scoreMult = 1;
+    // Move Enemies with gameSpeed
+    for (let i = enemies.length - 1; i >= 0; i--) {
+        let e = enemies[i];
+        e.x -= (5 * gameSpeed);
+        
+        if (player.x < e.x + e.w && player.x + player.w > e.x && player.y < e.y + e.h && player.y + player.h > e.y) {
+            if (player.dy > 0 && player.y + player.h < e.y + e.h / 2) {
+                enemies.splice(i, 1);
+                score += 50 * player.scoreMult;
+                player.dy = -10;
+                for (let j=0; j<10; j++) particles.push(new Particle(e.x, e.y, '#0099ff'));
+            } else if (!player.hasShield) {
+                gameOver();
+            } else {
+                player.hasShield = false;
+                enemies.splice(i, 1);
+            }
+        }
+        if (e.x + e.w < 0) enemies.splice(i, 1);
     }
 
-    // Collisions (Powerups & Obstacles)
+    // Move Powerups with gameSpeed
     powerups.forEach((p, i) => {
-        p.x -= 5;
+        p.x -= (5 * gameSpeed);
         if (player.x < p.x + p.w && player.x + player.w > p.x && player.y < p.y + p.h && player.y + player.h > p.y) {
             if (p.type === 'shield') player.hasShield = true;
             else { player.scoreMult = 2; player.multTimer = 400; }
@@ -109,21 +112,23 @@ function update(currentTime) {
         }
     });
 
+    // Move Obstacles with gameSpeed
     for (let i = obstacles.length - 1; i >= 0; i--) {
         let obs = obstacles[i];
-        obs.x -= 6 + (score / 500);
+        obs.x -= (6 * gameSpeed);
         if (player.x < obs.x + obs.w && player.x + player.w > obs.x && player.y < obs.y + obs.h && player.y + player.h > obs.y) {
-            if (player.hasShield) {
-                player.hasShield = false; obstacles.splice(i, 1);
-                for (let j=0; j<10; j++) particles.push(new Particle(obs.x, obs.y, 'yellow'));
-            } else { gameOver(); }
+            if (player.hasShield) { player.hasShield = false; obstacles.splice(i, 1); }
+            else gameOver();
         }
-        if (obs.x + obs.w < 0) { obstacles.splice(i, 1); score += (10 * player.scoreMult); }
+        if (obs.x + obs.w < 0) { obstacles.splice(i, 1); score += 10 * player.scoreMult; }
     }
 
-    spawnObstacle(currentTime);
+    spawnEntities(currentTime);
     if (score > highScore) highScore = score;
-    document.getElementById('score').innerText = `Score: ${score} | High: ${highScore} ${player.hasShield ? '🛡️' : ''} ${player.scoreMult > 1 ? 'x2🔥' : ''}`;
+    
+    // Update Score and Speed UI
+    document.getElementById('score').innerText = 
+        `Score: ${score} | High: ${highScore} | Speed: ${gameSpeed.toFixed(1)}x`;
 }
 
 function draw() {
@@ -134,12 +139,16 @@ function draw() {
     ctx.globalAlpha = 1.0;
 
     if (gameActive) {
-        // Character visual state
-        if (player.dashLag > 0) ctx.fillStyle = "#555"; // Grayed out during lag
-        else ctx.fillStyle = player.hasShield ? "#ffff00" : (player.scoreMult > 1 ? "#ff00ff" : (player.isDashing ? "#00ffff" : "#00ff00"));
-        
+        ctx.fillStyle = player.hasShield ? "#ffff00" : (player.scoreMult > 1 ? "#ff00ff" : (player.isDashing ? "#00ffff" : "#00ff00"));
         ctx.fillRect(player.x, player.y, player.w, player.h);
     }
+
+    enemies.forEach(e => {
+        ctx.fillStyle = "#0099ff";
+        ctx.fillRect(e.x, e.y, e.w, e.h);
+        ctx.fillStyle = "white"; 
+        ctx.fillRect(e.x + 5, e.y + 5, 5, 5); ctx.fillRect(e.x + 20, e.y + 5, 5, 5);
+    });
 
     particles.forEach(p => p.draw());
     powerups.forEach(p => { 
@@ -165,7 +174,7 @@ function gameOver() {
 
 window.addEventListener('keydown', (e) => {
     keys[e.code] = true;
-    if (e.code === 'Space' && player.jumpsLeft > 0 && player.dashLag <= 0) {
+    if (e.code === 'Space' && player.jumpsLeft > 0) {
         player.dy = player.jump; player.grounded = false; player.jumpsLeft--;
     }
     if (e.code === 'ArrowDown' && player.grounded) {

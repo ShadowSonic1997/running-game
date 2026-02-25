@@ -8,8 +8,18 @@
 <body>
     <div id="game-container">
         <canvas id="gameCanvas"></canvas>
-        <div id="score">Score: 0</div>
+        <div id="score">Score: 0 | High: 0 | Spd: 1.0x</div>
+        
+        <!-- Added Title Screen Overlay -->
+        <div id="title-screen">
+            <h1 id="game-title">AWESOME RUNNER</h1>
+            <button id="start-button">START GAME</button>
+            <p style="color: white; margin-top: 20px; font-family: sans-serif;">
+                Space: Jump | Arrows: Move & Crouch | Shift: Dash
+            </p>
+        </div>
     </div>
-    <script src="script.js"></script>
+    <!-- Added ?v=4 to force Chromebooks to update the script -->
+    <script src="script.js?v=4"></script>
 </body>
 </html>

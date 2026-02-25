@@ -2,24 +2,25 @@ const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
 canvas.width = 800; canvas.height = 400;
 
-// Game State
 let player = { 
     x: 50, y: 350, w: 30, h: 30, baseH: 30, crouchH: 15,
-    dy: 0, jump: -12, gravity: 0.6, 
-    grounded: true, jumpsLeft: 2, isCrouching: false,
-    isDashing: false, dashTimer: 0, canDash: true,
+    dx: 0, dy: 0, jump: -12, gravity: 0.6, 
+    speed: 5, grounded: true, jumpsLeft: 2, 
+    isCrouching: false, isDashing: false, dashTimer: 0, canDash: true,
+    dashLag: 0, // New: End lag timer
     hasShield: false, scoreMult: 1, multTimer: 0
 };
 
 let obstacles = [];
 let particles = [];
-let trails = []; // Ghost trail effects
+let trails = [];
 let powerups = []; 
 let score = 0;
 let highScore = localStorage.getItem('runnerHighScore') || 0;
 let gameActive = true;
 let lastSpawnTime = 0;
 let minSpawnInterval = 1000;
+let keys = {}; // Track multiple key presses for smoother movement
 
 class Particle {
     constructor(x, y, color) {
@@ -46,8 +47,8 @@ function spawnObstacle(currentTime) {
             lastSpawnTime = currentTime;
             minSpawnInterval = Math.max(500, 1000 - (score / 15));
         }
-        // Spawn Power-up occasionally
-        if (Math.random() < 0.01) {
+        // Lowered spawn rate (0.3% chance per frame)
+        if (Math.random() < 0.003) {
             let pType = Math.random() > 0.5 ? 'shield' : 'mult';
             powerups.push({ x: canvas.width, y: 320, w: 20, h: 20, type: pType });
         }
@@ -60,53 +61,60 @@ function update(currentTime) {
         return;
     }
 
-    // Dash & Trail Logic
+    // Horizontal Movement
+    if (!player.isDashing && player.dashLag <= 0) {
+        if (keys['ArrowRight']) player.x += player.speed;
+        if (keys['ArrowLeft']) player.x -= player.speed;
+    }
+
+    // Dash Logic
     if (player.isDashing) {
         trails.push({ x: player.x, y: player.y, w: player.w, h: player.h, life: 0.5 });
         player.dashTimer--;
-        player.x += 14; 
-        if (player.dashTimer <= 0) player.isDashing = false;
+        player.x += 15; 
+        if (player.dashTimer <= 0) {
+            player.isDashing = false;
+            player.dashLag = 20; // 20 frames of "end lag" (recovery)
+        }
     } else {
         player.dy += player.gravity;
         player.y += player.dy;
-        if (player.x > 50) player.x -= 2; 
+        if (player.dashLag > 0) player.dashLag--;
     }
 
-    // Update Trails
-    trails.forEach((t, i) => { t.life -= 0.05; if (t.life <= 0) trails.splice(i, 1); });
-
-    // Multiplier Timer
-    if (player.multTimer > 0) {
-        player.multTimer--;
-        if (player.multTimer === 0) player.scoreMult = 1;
-    }
-    
+    // Screen Bounds
     if (player.x < 0) player.x = 0;
     if (player.x + player.w > canvas.width) player.x = canvas.width - player.w;
 
+    // Grounding
     if (player.y + player.h > 380) {
         player.y = 380 - player.h; player.dy = 0; player.grounded = true;
         player.jumpsLeft = 2; player.canDash = true;
     }
 
-    // Power-up Collision
+    // Update Trails & Timers
+    trails.forEach((t, i) => { t.life -= 0.05; if (t.life <= 0) trails.splice(i, 1); });
+    if (player.multTimer > 0) {
+        player.multTimer--;
+        if (player.multTimer === 0) player.scoreMult = 1;
+    }
+
+    // Collisions (Powerups & Obstacles)
     powerups.forEach((p, i) => {
         p.x -= 5;
         if (player.x < p.x + p.w && player.x + player.w > p.x && player.y < p.y + p.h && player.y + player.h > p.y) {
             if (p.type === 'shield') player.hasShield = true;
-            else { player.scoreMult = 2; player.multTimer = 300; }
+            else { player.scoreMult = 2; player.multTimer = 400; }
             powerups.splice(i, 1);
         }
     });
 
-    // Obstacle Collision
     for (let i = obstacles.length - 1; i >= 0; i--) {
         let obs = obstacles[i];
         obs.x -= 6 + (score / 500);
         if (player.x < obs.x + obs.w && player.x + player.w > obs.x && player.y < obs.y + obs.h && player.y + player.h > obs.y) {
             if (player.hasShield) {
-                player.hasShield = false;
-                obstacles.splice(i, 1);
+                player.hasShield = false; obstacles.splice(i, 1);
                 for (let j=0; j<10; j++) particles.push(new Particle(obs.x, obs.y, 'yellow'));
             } else { gameOver(); }
         }
@@ -122,18 +130,15 @@ function draw() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.fillStyle = "#444"; ctx.fillRect(0, 380, canvas.width, 20); // Floor
 
-    // Draw Trails
-    trails.forEach(t => {
-        ctx.globalAlpha = t.life; ctx.fillStyle = "#00ffff";
-        ctx.fillRect(t.x, t.y, t.w, t.h);
-    });
+    trails.forEach(t => { ctx.globalAlpha = t.life; ctx.fillStyle = "#00ffff"; ctx.fillRect(t.x, t.y, t.w, t.h); });
     ctx.globalAlpha = 1.0;
 
     if (gameActive) {
-        // Player Color logic
-        ctx.fillStyle = player.hasShield ? "#ffff00" : (player.scoreMult > 1 ? "#ff00ff" : (player.isDashing ? "#00ffff" : "#00ff00"));
+        // Character visual state
+        if (player.dashLag > 0) ctx.fillStyle = "#555"; // Grayed out during lag
+        else ctx.fillStyle = player.hasShield ? "#ffff00" : (player.scoreMult > 1 ? "#ff00ff" : (player.isDashing ? "#00ffff" : "#00ff00"));
+        
         ctx.fillRect(player.x, player.y, player.w, player.h);
-        if (player.hasShield) { ctx.strokeStyle = "white"; ctx.strokeRect(player.x-4, player.y-4, player.w+8, player.h+8); }
     }
 
     particles.forEach(p => p.draw());
@@ -145,7 +150,6 @@ function draw() {
         ctx.fillStyle = obs.type === 'high' ? "#ffaa00" : "#ff0000";
         ctx.fillRect(obs.x, obs.y, obs.w, obs.h);
     });
-
     requestAnimationFrame(drawLoop);
 }
 
@@ -160,18 +164,20 @@ function gameOver() {
 }
 
 window.addEventListener('keydown', (e) => {
-    if (e.code === 'Space' && player.jumpsLeft > 0) {
+    keys[e.code] = true;
+    if (e.code === 'Space' && player.jumpsLeft > 0 && player.dashLag <= 0) {
         player.dy = player.jump; player.grounded = false; player.jumpsLeft--;
     }
     if (e.code === 'ArrowDown' && player.grounded) {
         player.isCrouching = true; player.h = player.crouchH; player.y = 380 - player.h;
     }
-    if (e.code === 'ShiftLeft' && player.canDash) {
-        player.isDashing = true; player.dashTimer = 15; player.canDash = false; player.dy = 0;
+    if (e.code === 'ShiftLeft' && player.canDash && player.dashLag <= 0) {
+        player.isDashing = true; player.dashTimer = 12; player.canDash = false; player.dy = 0;
     }
 });
 
 window.addEventListener('keyup', (e) => {
+    keys[e.code] = false;
     if (e.code === 'ArrowDown') {
         player.isCrouching = false; player.h = player.baseH; player.y = 380 - player.h;
     }
